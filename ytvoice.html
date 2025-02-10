@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>YouTube Voice Recording Script Manager</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary-blue: #3498db;
+            --light-blue: #e6f2ff;
+            --white: #ffffff;
+        }
+        body {
+            font-family: 'Arial', sans-serif;
+            background-color: var(--light-blue);
+            margin: 0;
+            padding: 20px;
+            color: #2c3e50;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .section {
+            background-color: var(--white);
+            border-radius: 12px;
+            box-shadow: 0 6px 12px rgba(0,0,0,0.1);
+            padding: 20px;
+            flex: 1;
+        }
+        #script-box, #recorded-lines {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+        }
+        .script-line, .recording-item {
+            display: flex;
+            align-items: center;
+            background-color: var(--light-blue);
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 10px;
+            cursor: move;
+        }
+        .script-line .number, .recording-item .number {
+            margin-right: 10px;
+            font-weight: bold;
+            color: var(--primary-blue);
+        }
+        .script-line input[type="text"] {
+            flex-grow: 1;
+            border: none;
+            background: transparent;
+            padding: 5px;
+        }
+        .btn {
+            background-color: var(--primary-blue);
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            margin-left: 5px;
+        }
+        .btn:hover {
+            background-color: #2980b9;
+        }
+        .dragging {
+            opacity: 0.5;
+        }
+        #final-recording {
+            text-align: center;
+            margin-top: 20px;
+        }
+        .download-btn {
+            display: inline-block;
+            background-color: #2ecc71;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            margin-top: 10px;
+            transition: background-color 0.3s;
+        }
+        .download-btn:hover {
+            background-color: #27ae60;
+        }
+    </style>
+</head>
+<body>
+    <div class="navbar">
+        <h1>YouTube Voice Recording Script Manager</h1>
+    <div class="container">
+        <div class="section">
+            <h2>Script Writing</h2>
+            <div id="script-box"></div>
+            <div>
+                <input type="text" id="script-input" placeholder="Enter script line">
+                <button class="btn" onclick="addScriptLine()">Add Line</button>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Voice Recording</h2>
+            <div id="recorded-lines"></div>
+            <div>
+                <button class="btn" onclick="startRecording()">
+                    <i class="fas fa-microphone"></i> Start Recording
+                </button>
+                <button class="btn" onclick="stopRecording()" disabled id="stop-btn">
+                    <i class="fas fa-stop"></i> Stop Recording
+                </button>
+            </div>
+            <button class="btn" onclick="mergeRecordings()">Merge All Recordings</button>
+            <div id="final-recording"></div>
+        </div>
+    </div>
+
+    <script>
+        let scriptLines = [];
+        let recordedAudioBlobs = [];
+
+        function addScriptLine() {
+            const scriptInput = document.getElementById('script-input');
+            const scriptBox = document.getElementById('script-box');
+            
+            if (scriptInput.value.trim()) {
+                const lineObj = {
+                    text: scriptInput.value,
+                    checked: true
+                };
+                scriptLines.push(lineObj);
+                renderScriptLines();
+                scriptInput.value = '';
+            }
+        }
+
+        function renderScriptLines() {
+            const scriptBox = document.getElementById('script-box');
+            scriptBox.innerHTML = '';
+            scriptLines.forEach((line, index) => {
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'script-line';
+                lineDiv.draggable = true;
+                lineDiv.dataset.index = index;
+                lineDiv.innerHTML = `
+                    <span class="number">${index + 1}.</span>
+                    <input type="text" value="${line.text}" readonly>
+                    <input type="checkbox" ${line.checked ? 'checked' : ''} 
+                           onchange="updateLineChecked(${index}, this.checked)">
+                    <button class="btn" onclick="removeScriptLine(${index})">Remove</button>
+                `;
+                
+                lineDiv.addEventListener('dragstart', dragStart);
+                lineDiv.addEventListener('dragover', dragOver);
+                lineDiv.addEventListener('drop', drop);
+                lineDiv.addEventListener('dragend', dragEnd);
+                
+                scriptBox.appendChild(lineDiv);
+            });
+        }
+
+        function updateLineChecked(index, checked) {
+            scriptLines[index].checked = checked;
+        }
+
+        function removeScriptLine(index) {
+            scriptLines.splice(index, 1);
+            renderScriptLines();
+        }
+
+        function dragStart(e) {
+            e.target.classList.add('dragging');
+            e.dataTransfer.setData('text/plain', e.target.dataset.index);
+        }
+
+        function dragOver(e) {
+            e.preventDefault();
+        }
+
+        function drop(e) {
+            e.preventDefault();
+            const draggedIndex = e.dataTransfer.getData('text/plain');
+            const droppedOnIndex = e.target.closest('.script-line').dataset.index;
+            
+            // Swap lines
+            const temp = scriptLines[draggedIndex];
+            scriptLines[draggedIndex] = scriptLines[droppedOnIndex];
+            scriptLines[droppedOnIndex] = temp;
+            
+            renderScriptLines();
+        }
+
+        function dragEnd(e) {
+            e.target.classList.remove('dragging');
+        }
+
+        let mediaRecorder;
+        let audioChunks = [];
+
+        function startRecording() {
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+
+                    mediaRecorder.ondataavailable = (event) => {
+                        audioChunks.push(event.data);
+                    };
+
+                    mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        const audioUrl = URL.createObjectURL(audioBlob);
+                        
+                        recordedAudioBlobs.push({
+                            blob: audioBlob,
+                            url: audioUrl
+                        });
+                        renderRecordedLines();
+                    };
+
+                    mediaRecorder.start();
+                    document.getElementById('stop-btn').disabled = false;
+                });
+        }
+
+        function renderRecordedLines() {
+            const recordedLinesDiv = document.getElementById('recorded-lines');
+            recordedLinesDiv.innerHTML = '';
+            recordedAudioBlobs.forEach((recording, index) => {
+                const recordingItem = document.createElement('div');
+                recordingItem.className = 'recording-item';
+                recordingItem.draggable = true;
+                recordingItem.dataset.index = index;
+                recordingItem.innerHTML = `
+                    <span class="number">${index + 1}.</span>
+                    <audio controls src="${recording.url}"></audio>
+                    <button class="btn" onclick="removeRecording(${index})">Remove</button>
+                `;
+                
+                recordingItem.addEventListener('dragstart', dragStartRecording);
+                recordingItem.addEventListener('dragover', dragOver);
+                recordingItem.addEventListener('drop', dropRecording);
+                recordingItem.addEventListener('dragend', dragEnd);
+                
+                recordedLinesDiv.appendChild(recordingItem);
+            });
+        }
+
+        function removeRecording(index) {
+            recordedAudioBlobs.splice(index, 1);
+            renderRecordedLines();
+        }
+
+        function dragStartRecording(e) {
+            e.target.classList.add('dragging');
+            e.dataTransfer.setData('text/plain', e.target.dataset.index);
+        }
+
+        function dropRecording(e) {
+            e.preventDefault();
+            const draggedIndex = e.dataTransfer.getData('text/plain');
+            const droppedOnIndex = e.target.closest('.recording-item').dataset.index;
+            
+            // Swap recordings
+            const temp = recordedAudioBlobs[draggedIndex];
+            recordedAudioBlobs[draggedIndex] = recordedAudioBlobs[droppedOnIndex];
+            recordedAudioBlobs[droppedOnIndex] = temp;
+            
+            renderRecordedLines();
+        }
+
+        function stopRecording() {
+            mediaRecorder.stop();
+            document.getElementById('stop-btn').disabled = true;
+        }
+
+        function mergeRecordings() {
+            if (recordedAudioBlobs.length > 0) {
+                const mergedBlob = new Blob(
+                    recordedAudioBlobs.map(recording => recording.blob), 
+                    { type: 'audio/wav' }
+                );
+                const mergedUrl = URL.createObjectURL(mergedBlob);
+                
+                const finalRecordingDiv = document.getElementById('final-recording');
+                finalRecordingDiv.innerHTML = `
+                    <h3>Final Recording</h3>
+                    <audio controls src="${mergedUrl}" style="width: 100%;"></audio>
+                    <a href="${mergedUrl}" download="merged_recording.wav" class="download-btn">
+                        <i class="fas fa-download"></i> Download Final Recording
+                    </a>
+                `;
+            }
+        }
+    </script>
+    <h3> Created by Rudra Madhab Mishra , join wp group for updates " https://whatsapp.com/channel/0029Vb52nJUId7nSfw8Nmm0L "</h3>
+</body>
+</html>
